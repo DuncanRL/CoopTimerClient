@@ -12,7 +12,7 @@ import webbrowser
 from sys import platform, maxsize
 import tkinter.colorchooser as tkColorChooser
 
-version = "v1.0.0"
+version = "v1.0.1"
 
 
 def resource_path(relative_path):
@@ -315,7 +315,7 @@ class ConnectMenu(tk.Toplevel):
             if valid:
                 self.parent.connectMenu = None
                 self.destroy()
-                self.parent.timerClient.connect()
+                self.parent.timerClient.connect(args[0],args[1])
 
 
 class FontMenu(tk.Toplevel):
