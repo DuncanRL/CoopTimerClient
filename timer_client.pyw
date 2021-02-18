@@ -28,8 +28,9 @@ class SyncedTime:
         self.resync()
 
     def resync(self):
-        webinfo = json.loads(requests.get(
-            "http://worldtimeapi.org/api/timezone/Europe/London").content.decode())
+        request = requests.get(
+            "http://worldtimeapi.org/api/timezone/Europe/London")
+        webinfo = json.loads(request.content.decode())
         self.startTime = time.time()
         dt = webinfo["datetime"]
         unix = webinfo["unixtime"]
@@ -130,6 +131,8 @@ class TimerClient:
                     args = msg.split(":")
                     if args[0] == "stop":
                         self.status = "stopped"
+                    elif args[0] == "resync":
+                        self.syncedTime.resync()
                     elif args[0] == "paused":
                         self.status = "paused"
                         self.pauseTime = float(args[1])
@@ -139,7 +142,7 @@ class TimerClient:
                         self.status = "running"
                         self.startTime = float(args[1])
 
-            except ValueError:
+            except:
                 self.disconnectionEvent()
                 break
 
@@ -188,9 +191,15 @@ class TimerWindow(tk.Frame):
         self.timerClient.disconnect()
         self.destroy()
         self.parent.destroy()
+        self.save()
+    
+    def save(self):
+        with open(self.optionsPath,"w+") as optionsFile:
+            json.dump(self.optionsJson,optionsFile)
+            optionsFile.close()
 
     def loop(self):
-        self.after(int(1000/65), self.loop)
+        self.after(int(1000/80), self.loop)
 
         if self.timerClient.getFailed():
             messagebox.showerror(message="Connection Failed")
