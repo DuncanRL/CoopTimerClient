@@ -10,6 +10,7 @@ from os.path import expanduser, isfile, join, abspath
 from os import mkdir, getcwd
 import webbrowser
 from sys import platform, maxsize
+import tkinter.colorchooser as tkColorChooser
 
 version = "v1.0.0"
 
@@ -93,12 +94,12 @@ class TimerClient:
 
     def disconnectionEvent(self):
         self.status = "disconnected"
-        #print("Disconnected")
+        # print("Disconnected")
         try:
             self.socket.close()
         except:
             pass
-    
+
     def getFailed(self):
         if self.failed:
             self.failed = False
@@ -118,7 +119,7 @@ class TimerClient:
 
             self.disconnectionEvent()
         else:
-            pass#print("Already disconnected.")
+            pass  # print("Already disconnected.")
 
     def recvLoop(self):
         while True:
@@ -153,17 +154,19 @@ class TimerWindow(tk.Frame):
 
         self.parent = parent
         self.connectMenu = None
+        self.fontMenu = None
         self.parent.protocol("WM_DELETE_WINDOW", self.exit)
 
+        self.timerClient = TimerClient()
+        self.parent.bind('f', self.openFontMenu)
         self.parent.bind('c', self.openConnectMenu)
         self.parent.bind('d', self.disconnect)
-
-        self.timerClient = TimerClient()
         self.font = tkFont.Font(self, ("Arial", 50))
 
         self.defaultOptions = {"display": {
             "name": "Arial", "size": 50, "color": "#ffffff", "bg": "#000000"}, "lastConnect": ""}
-        self.text = tk.Label(self, text=self.convertSeconds(0), font=self.font,width=50,anchor="w")
+        self.text = tk.Label(self, text=self.convertSeconds(
+            0), font=self.font, width=50, anchor="w",)
         self.text.pack()
 
         if "win" in platform:
@@ -179,23 +182,27 @@ class TimerWindow(tk.Frame):
         self.loadSettings()
 
         self.after(0, self.loop)
-    
-    def disconnect(self,x=0):
+
+    def disconnect(self, x=0):
         self.timerClient.disconnect()
 
-    def openConnectMenu(self,x=0):
-        if self.connectMenu == None:
+    def openFontMenu(self, x=0):
+        if self.connectMenu == None and self.fontMenu == None:
+            self.fontMenu = FontMenu(self)
+
+    def openConnectMenu(self, x=0):
+        if self.connectMenu == None and self.fontMenu == None:
             self.connectMenu = ConnectMenu(self)
-    
+
     def exit(self):
         self.timerClient.disconnect()
         self.destroy()
         self.parent.destroy()
         self.save()
-    
+
     def save(self):
-        with open(self.optionsPath,"w+") as optionsFile:
-            json.dump(self.optionsJson,optionsFile)
+        with open(self.optionsPath, "w+") as optionsFile:
+            json.dump(self.optionsJson, optionsFile)
             optionsFile.close()
 
     def loop(self):
@@ -210,8 +217,14 @@ class TimerWindow(tk.Frame):
             self.text.config(text=self.convertSeconds(
                 self.timerClient.getTime()))
         else:
-            self.font.config(size=int(self.optionsJson["display"]["size"]/2.5))
-            self.text.config(text="Press 'c' to connect to a server.")
+            if self.timerClient.status == "connecting":
+                self.font.config(
+                    size=int(self.optionsJson["display"]["size"]/2.5))
+                self.text.config(text="Connecting...")
+            else:
+                self.font.config(
+                    size=int(self.optionsJson["display"]["size"]/3))
+                self.text.config(text="Press 'c' to connect to a server.\nPress 'd' to disconnect.\nPress 'f' to change font settings.")
 
     def loadSettings(self):
         if not isfile(self.optionsPath):
@@ -229,6 +242,9 @@ class TimerWindow(tk.Frame):
                 self.optionsJson = json.load(optionsFile)
                 optionsFile.close()
         self.validateOptions()
+        self.reloadJson()
+
+    def reloadJson(self):
         displayJson = self.optionsJson["display"]
         self.parent.config(background=displayJson["bg"])
         self.config(background=displayJson["bg"])
@@ -264,18 +280,19 @@ class ConnectMenu(tk.Toplevel):
         tk.Toplevel.__init__(self, parent)
         self.parent = parent
         self.protocol("WM_DELETE_WINDOW", self.exit)
-        self.inputbox = tk.Entry(self,width=20)
-        self.inputbox.grid(column=0,row=0,padx=2,pady=2)
-        self.inputbox.insert(0,self.parent.optionsJson["lastConnect"])
-        self.button = tk.Button(self,text="Connect",command=self.connect,width=8)
-        self.button.grid(column=1,row=0,padx=2,pady=2)
+        self.inputbox = tk.Entry(self, width=20)
+        self.inputbox.grid(column=0, row=0, padx=2, pady=2)
+        self.inputbox.insert(0, self.parent.optionsJson["lastConnect"])
+        self.button = tk.Button(self, text="Connect",
+                                command=self.connect, width=8)
+        self.button.grid(column=1, row=0, padx=2, pady=2)
 
     def exit(self):
         self.parent.connectMenu = None
         self.destroy()
-    
+
     def connect(self):
-        output = self.inputbox.get().replace(" ","").rstrip()
+        output = self.inputbox.get().replace(" ", "").rstrip()
         self.parent.optionsJson["lastConnect"] = output
 
         args = output.split(":")
@@ -287,18 +304,117 @@ class ConnectMenu(tk.Toplevel):
             if len(args) == 1:
                 args.append(25564)
                 valid = True
-                
+
             else:
                 try:
                     args[1] = int(args[1])
                     valid = True
                 except:
                     messagebox.showerror(message="Invalid Port!")
-                    
+
             if valid:
                 self.parent.connectMenu = None
                 self.destroy()
                 self.parent.timerClient.connect()
+
+
+class FontMenu(tk.Toplevel):
+    def __init__(self, parent):
+        tk.Toplevel.__init__(self, parent)
+        self.after(100, self.loop)
+        self.parent = parent
+        self.protocol("WM_DELETE_WINDOW", self.exit)
+
+        fontframe = tk.Frame(self)
+        fontframe.grid(row=0, column=0, padx=2, pady=2)
+        tk.Button(fontframe, text="Open List", command=self.openFontList, width=7).grid(
+            padx=2, pady=2, row=0, column=0, sticky="w")
+        self.fontEntry = tk.Entry(fontframe, width=19)
+        self.fontEntry.insert(0, parent.optionsJson["display"]["name"])
+        self.fontEntry.grid(padx=2, pady=2, row=0, column=1, sticky="w")
+        self.fontSizeEntry = IntEntry(fontframe, 200)
+        self.fontSizeEntry.insert(
+            0, str(parent.optionsJson["display"]["size"]))
+        self.fontSizeEntry.config(width=3)
+        self.fontSizeEntry.grid(padx=2, pady=2, row=0, column=2)
+
+        colorframe = tk.Frame(self)
+        colorframe.grid(row=1, column=0, padx=2, pady=2)
+
+        self.button1 = tk.Button(colorframe, width=13,
+                                 command=self.chooseColour1)
+        self.button2 = tk.Button(colorframe, width=13,
+                                 command=self.chooseColour2)
+        self.button1.grid(padx=2, pady=2, row=1, column=0)
+        self.button2.grid(padx=2, pady=2, row=1, column=1)
+
+        self.color1 = parent.optionsJson["display"]["color"]
+        self.color2 = parent.optionsJson["display"]["bg"]
+
+        self.button1.configure(bg=self.color1)
+        self.button2.configure(bg=self.color2)
+
+    def chooseColour1(self):
+        self.color1 = tkColorChooser.askcolor(self.color1)[1]
+        self.button1.configure(bg=self.color1)
+        self.focus()
+
+    def chooseColour2(self):
+        self.color2 = tkColorChooser.askcolor(self.color2)[1]
+        self.button2.configure(bg=self.color2)
+        self.focus()
+
+    def openFontList(self):
+        if "win" in platform:
+            filename = expanduser(
+                "~/AppData/Roaming/.cooptimer/fonts.html")
+        else:
+            filename = join(getcwd(), "fonts.html")
+
+        with open(filename, "w") as fontfile:
+            fontfile.write("<!DOCTYPE html><html><body>")
+            for i in tk.font.families(self):
+                fontfile.write("<p>"+i+"</p>")
+            fontfile.write("</body></html>")
+            fontfile.close()
+
+        webbrowser.open(filename)
+
+    def loop(self):
+        self.after(100, self.loop)
+        self.updatestuff()
+
+    def updatestuff(self):
+        self.parent.optionsJson["display"] = {"name": self.fontEntry.get(), "size": int(
+            self.fontSizeEntry.get()), "color": self.color1, "bg": self.color2}
+        self.parent.reloadJson()
+
+    def exit(self):
+        self.parent.fontMenu = None
+        self.destroy()
+
+
+class IntEntry(tk.Entry):
+    def __init__(self, parent, max=maxsize):
+        self.max = max
+        self.parent = parent
+        vcmd = (self.parent.register(self.validateInt),
+                '%d', '%i', '%P', '%s', '%S', '%v', '%V', '%W')
+        tk.Entry.__init__(self, parent, validate='key', validatecommand=vcmd)
+
+    def validateInt(self, action, index, value_if_allowed,
+                    prior_value, text, validation_type, trigger_type, widget_name):
+        if value_if_allowed == "":
+            return True
+        if value_if_allowed:
+            try:
+                if (len(value_if_allowed) > 1 and value_if_allowed[0] == "0") or (int(value_if_allowed) > self.max):
+                    return False
+                return True
+            except ValueError:
+                return False
+        else:
+            return False
 
 
 if __name__ == "__main__":
