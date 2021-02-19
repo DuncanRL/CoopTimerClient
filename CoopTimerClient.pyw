@@ -6,14 +6,37 @@ from threading import Thread
 import tkinter as tk
 import tkinter.font as tkFont
 from tkinter import messagebox
-from os.path import expanduser, isfile, join, abspath
+from os.path import expanduser, isfile, join, abspath, getmtime
 from os import mkdir, getcwd
 import webbrowser
 from sys import platform, maxsize
 import tkinter.colorchooser as tkColorChooser
 from playsound import playsound
+import keyboard
 
-version = "v1.0.3"
+version = "v1.0.4"
+
+
+def readKey(timeout):
+    keyr = keyReader()
+    key = keyr.readKey(timeout)
+    del(keyr)
+    return key
+
+
+class keyReader():
+    def readKey(self, timeout):
+        self.key = None
+        self.rkt = Thread(target=self.readKeyThread)
+        self.rkt.start()
+        startTime = time.time()
+
+        while time.time() - startTime < timeout and self.key == None:
+            time.sleep(0.01)
+        return self.key
+
+    def readKeyThread(self):
+        self.key = keyboard.read_hotkey(suppress=False)
 
 
 def resource_path(relative_path):
@@ -23,6 +46,154 @@ def resource_path(relative_path):
     except Exception:
         base_path = abspath(".")
     return join(base_path, relative_path)
+
+
+class NoInternetConnectionException(Exception):
+    pass
+
+
+def getLocalIP():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 1))
+    except:
+        raise NoInternetConnectionException
+    ip = s.getsockname()[0]
+    s.close()
+    return ip
+
+
+class TimerClientInstance:
+    def __init__(self, parent, c, addr):
+        self.parent = parent
+        self.clientSocket = c
+        self.addr = addr
+        self.running = True
+        self.thread = Thread(target=self.loop)
+        self.thread.start()
+
+    def loop(self):
+        try:
+            while self.running:
+                msg = self.clientSocket.recv(1024)
+                if msg.decode() == "quit":
+                    self.running = False
+                    self.send("end")
+        except:
+            pass
+        self.parent.removeClient(self)
+
+    def send(self, msg):
+        self.clientSocket.send(msg.encode())
+
+    def stop(self):
+        self.running = False
+        self.send("end")
+        self.clientSocket.close()
+
+
+class TimerServer:
+    def __init__(self, addr="127.0.0.1", port=25564):
+        self.addr = addr
+        self.port = port
+
+        self.syncedTime = SyncedTime()
+        self.socket = socket.socket()
+
+        self.clients = []
+        self.running = False
+        self.startTime = self.syncedTime.time()
+        self.pauseTime = 0
+        self.timerStatus = "stopped"
+
+    def start(self):
+        if not self.running:
+            self.running = True
+
+            self.socket.bind((self.addr, self.port))
+            self.socket.listen(50)
+
+            self.acceptConnectionsThread = Thread(
+                target=self.acceptConnectionsLoop)
+            self.acceptConnectionsThread.start()
+
+    def startTimer(self):
+        if self.timerStatus != "running":
+            self.startTime = self.syncedTime.time() - self.pauseTime
+            self.timerStatus = "running"
+        self.updateClients()
+
+    def resetTimer(self):
+        if self.timerStatus != "stopped":
+            self.pauseTime = 0
+            self.timerStatus = "stopped"
+        self.updateClients()
+
+    def pauseTimer(self):
+        if self.timerStatus == "running":
+            self.pauseTime = self.syncedTime.time()-self.startTime
+            self.timerStatus = "paused"
+        self.updateClients()
+
+    def togglePause(self):
+        if self.timerStatus == "running":
+            self.pauseTimer()
+        elif self.timerStatus in ["paused", "stopped"]:
+            self.startTimer()
+
+    def updateClient(self, client):
+        if self.timerStatus == "stopped":
+            client.send("stop")
+        elif self.timerStatus == "running":
+            client.send("running:"+str(self.startTime))
+        elif self.timerStatus == "paused":
+            client.send("paused:"+str(self.pauseTime))
+
+    def updateClients(self):
+        for client in self.clients:
+            self.updateClient(client)
+
+    def sendToAll(self, msg):
+        for client in self.clients:
+            client.send(msg)
+
+    def acceptConnectionsLoop(self):
+        while self.running:
+            try:
+                c, addr = self.socket.accept()
+                client = TimerClientInstance(self, c, addr)
+                if self.running:
+                    self.clients.append(client)
+                    print("[Timer Server] Client '"+str(addr)+"' connected.")
+                    self.updateClient(client)
+            except:
+                pass
+
+    def setTime(self, x):
+        self.pauseTime = x
+        self.startTime = self.syncedTime.time()-x
+
+    def getTime(self):
+        if self.timerStatus == "stopped":
+            return 0.0
+        elif self.timerStatus == "running":
+            return self.syncedTime.time()-self.startTime()
+        elif self.timerStatus == "paused":
+            return self.pauseTime
+
+    def resync(self):
+        self.syncedTime.resync()
+        self.sendToAll("resync")
+
+    def kill(self):
+        for i in self.clients:
+            i.stop()
+        self.running = False
+        self.socket.close()
+
+    def removeClient(self, client):
+        print("[Timer Server] Client '"+str(client.addr)+"' disconnected.")
+        self.clients.remove(client)
 
 
 class SyncedTime:
@@ -49,7 +220,7 @@ class SyncedTime:
 
 
 class TimerClient:
-    def __init__(self, parent = None):
+    def __init__(self, parent=None):
         self.parent = parent
         self.socket = None
         self.status = "disconnected"
@@ -115,7 +286,6 @@ class TimerClient:
             self.parent.startTimeEvent()
         except:
             pass
-        
 
     def disconnect(self):
         if self.status != "disconnected":
@@ -166,17 +336,19 @@ class TimerWindow(tk.Frame):
         self.parent = parent
         self.connectMenu = None
         self.fontMenu = None
+        self.hostMenuTL = None
         self.parent.protocol("WM_DELETE_WINDOW", self.exit)
 
         self.timerClient = TimerClient(parent=self)
         self.parent.bind('f', self.openFontMenu)
         self.parent.bind('c', self.openConnectMenu)
         self.parent.bind('d', self.disconnect)
+        self.parent.bind('h', self.openHostMenu)
         self.font = tkFont.Font(self, ("Arial", 50))
         self.dingPath = resource_path("ding.mp3")
 
         self.defaultOptions = {"display": {
-            "name": "Arial", "size": 50, "color": "#ffffff", "bg": "#000000"}, "lastConnect": "","ding":False}
+            "name": "Arial", "size": 50, "color": "#ffffff", "bg": "#000000"}, "lastConnect": "", "ding": False}
         self.text = tk.Label(self, text=self.convertSeconds(
             0), font=self.font, width=50, anchor="w",)
         self.text.pack()
@@ -193,18 +365,25 @@ class TimerWindow(tk.Frame):
         self.optionsJson = None
         self.loadSettings()
 
+        self.startTimeEvent()
+
         self.after(0, self.loop)
-    
+
+    def openHostMenu(self, x=0):
+        if self.hostMenuTL == None:
+            self.hostMenuTL = HostMenuTL(self)
+
     def startTimeEvent(self):
         try:
             if self.optionsJson["ding"]:
-                playsound(self.dingPath,False)
+                playsound(self.dingPath, False)
         except:
             pass
 
     def disconnect(self, x=0):
         if self.timerClient.isConnected():
-            ans = messagebox.askyesno(title="CTC: Disconnect?", message="Are you sure you want to disconnect?")
+            ans = messagebox.askyesno(
+                title="CTC: Disconnect?", message="Are you sure you want to disconnect?")
             if ans:
                 self.timerClient.disconnect()
 
@@ -217,6 +396,8 @@ class TimerWindow(tk.Frame):
             self.connectMenu = ConnectMenu(self)
 
     def exit(self):
+        if not self.hostMenuTL is None:
+            self.hostMenuTL.exit()
         self.timerClient.disconnect()
         self.destroy()
         self.parent.destroy()
@@ -231,7 +412,8 @@ class TimerWindow(tk.Frame):
         self.after(int(1000/80), self.loop)
 
         if self.timerClient.getFailed():
-            messagebox.showerror(title="CTC: Error", message="Connection Failed")
+            messagebox.showerror(title="CTC: Error",
+                                 message="Connection Failed")
             self.openConnectMenu()
 
         if self.timerClient.isConnected():
@@ -247,7 +429,7 @@ class TimerWindow(tk.Frame):
                 self.font.config(
                     size=int(self.optionsJson["display"]["size"]/3))
                 self.text.config(
-                    text="Press 'c' to connect to a server.\nPress 'd' to disconnect.\nPress 'f' to change font settings.")
+                    text="Press 'c' to connect to a server.\nPress 'd' to disconnect.\nPress 'f' to change font settings.\nPress 'h' to host a server.", anchor="w", justify=tk.LEFT)
 
     def loadSettings(self):
         if not isfile(self.optionsPath):
@@ -334,20 +516,233 @@ class ConnectMenu(tk.Toplevel):
                     args[1] = int(args[1])
                     valid = True
                 except:
-                    messagebox.showerror(title="CTC: Error", message="Invalid Port!")
+                    messagebox.showerror(
+                        title="CTC: Error", message="Invalid Port!")
 
             if valid:
                 self.parent.connectMenu = None
                 self.destroy()
                 self.parent.timerClient.status = "connecting"
                 self.parent.after(int(1000/60), self.parent.timerClient.connect,
-                           args[0], args[1])
+                                  args[0], args[1])
+
+
+class HostMenuTL(tk.Toplevel):
+    def __init__(self, parent):
+        tk.Toplevel.__init__(self, parent)
+        self.parent = parent
+        self.attributes("-topmost", True)
+        self.hostMenu = HostMenu(self, containedByClient=True)
+        self.hostMenu.grid(row=0, column=0, padx=2, pady=2)
+
+        self.title("Coop Timer Server")
+        self.protocol("WM_DELETE_WINDOW", self.exit)
+
+    def exit(self):
+        self.hostMenu.close()
+        self.parent.hostMenuTL = None
+        self.destroy()
+
+
+class HostMenu(tk.Frame):
+    def __init__(self, parent, containedByClient=False, *args, **kwargs):
+        tk.Frame.__init__(self, parent, *args, **kwargs)
+        parent.attributes("-topmost", True)
+        self.parent = parent
+        if containedByClient:
+            self.timerClient = parent.parent.timerClient
+
+        if "win" in platform:
+            self.optionsFolderPath = expanduser(
+                "~/AppData/Roaming/.cooptimer/")
+            self.optionsPath = expanduser(
+                "~/AppData/Roaming/.cooptimer/serverOptions.json")
+        else:
+            self.optionsFolderPath = getcwd()
+            self.optionsPath = join(getcwd(), "serverOptions.json")
+
+        self.defaultOptions = {"mcPath": (expanduser(
+            "~/AppData/Roaming/.minecraft" if "win" in platform else "")), "port": 25564, "startKey": "[", "resetKey": "]", "startMessage": "Set the time to 0"}
+
+        self.optionsJson = None
+        self.loadSettings()
+        self.timerServer = None
+        self.localIP = getLocalIP()
+
+        self.startKey = self.optionsJson["startKey"]
+        self.resetKey = self.optionsJson["resetKey"]
+
+        pathFrame = tk.Frame(self)
+        pathFrame.grid(row=0, column=0, sticky="w", padx=2, pady=2)
+
+        tk.Label(pathFrame, text="Minecraft Path: ").grid(
+            row=0, column=0, padx=2, pady=2)
+        self.mcPathEntry = tk.Entry(pathFrame)
+        self.mcPathEntry.grid(row=0, column=1, sticky="w", padx=2, pady=2)
+        self.mcPathEntry.insert(0, self.optionsJson["mcPath"])
+
+        tk.Label(pathFrame, text="/time set 0 >").grid(
+            row=2, column=0, padx=2, pady=2)
+        self.startMessageEntry = tk.Entry(pathFrame)
+        self.startMessageEntry.grid(
+            row=2, column=1, sticky="w", padx=2, pady=2)
+        self.startMessageEntry.insert(0, self.optionsJson["startMessage"])
+
+        self.startKeyButton = tk.Button(
+            self, text="Start/Pause: "+self.startKey, width=14, command=self.setStartKey)
+        self.startKeyButton.grid(row=4, column=0, sticky="w", padx=2, pady=2)
+        self.resetKeyButton = tk.Button(
+            self, text="Reset: "+self.resetKey, width=14, command=self.setResetKey)
+        self.resetKeyButton.grid(row=4, column=0, sticky="e", padx=2, pady=2)
+
+        serverStuffFrame = tk.Frame(self)
+        serverStuffFrame.grid(row=400, column=0, sticky="w", padx=2, pady=2)
+
+        addrInfoFrame = tk.Frame(serverStuffFrame)
+        addrInfoFrame.grid(row=1, column=0, padx=2, pady=2)
+
+        tk.Label(addrInfoFrame, text=f"Local IP: {self.localIP}").grid(
+            row=0, column=0, sticky="w", padx=2, pady=2)
+
+        portFrame = tk.Frame(addrInfoFrame)
+        portFrame.grid(row=1, column=0, sticky="w", padx=2, pady=2)
+
+        tk.Label(portFrame, text="Port: ").grid(
+            row=0, column=0, sticky="w", padx=2, pady=2)
+        self.portEntry = IntEntry(portFrame, max=65535)
+        self.portEntry.config(width=6)
+        self.portEntry.insert(0, str(self.optionsJson["port"]))
+        self.portEntry.grid(row=0, column=1, sticky="w", padx=2, pady=2)
+
+        self.button = tk.Button(
+            serverStuffFrame, text="Start Server", command=self.buttonPress)
+        self.button.grid(row=1, column=1, padx=2, pady=2, sticky="w")
+
+        self.connectedLabel = tk.Label(serverStuffFrame, text="Connected: N/A")
+        self.connectedLabel.grid(row=2, column=0, sticky="w", padx=2, pady=2)
+
+        self.after(100, self.loop)
+
+    def loop(self):
+        self.after(100, self.loop)
+        if self.timerServer == None:
+            self.connectedLabel.config(text="Connected: N/A")
+        else:
+            self.connectedLabel.config(
+                text="Connected: "+str(len(self.timerServer.clients)))
+            if not self.timerClient.isConnected():
+                self.timerClient.connect(
+                    self.localIP, int(self.portEntry.get()))
+
+    def loadSettings(self):
+        if not isfile(self.optionsPath):
+            try:
+                mkdir(self.optionsFolderPath)
+            except:
+                pass
+            with open(self.optionsPath, "w+") as optionsFile:
+
+                self.optionsJson = self.defaultOptions
+                json.dump(self.defaultOptions, optionsFile, indent=4)
+                optionsFile.close()
+        else:
+            with open(self.optionsPath, "r") as optionsFile:
+                self.optionsJson = json.load(optionsFile)
+                optionsFile.close()
+        self.validateOptions()
+
+    def save(self):
+        self.optionsJson["mcPath"] = self.mcPathEntry.get()
+        self.optionsJson["startMessage"] = self.startMessageEntry.get()
+        self.optionsJson["port"] = int(self.portEntry.get())
+        self.optionsJson['startKey'] = self.startKey
+        self.optionsJson['resetKey'] = self.resetKey
+        with open(self.optionsPath, "w+") as optionsFile:
+            json.dump(self.optionsJson, optionsFile)
+            optionsFile.close()
+
+    def validateOptions(self):
+        for i in self.defaultOptions:
+            try:
+                self.optionsJson[i]
+            except:
+                self.optionsJson[i] = self.defaultOptions[i]
+
+    def setStartKey(self, x=0):
+        k = readKey(10)
+        if not k is None:
+            self.startKey = k
+            self.startKeyButton.config(text="Start/Pause: "+k)
+
+    def setResetKey(self, x=0):
+        k = readKey(10)
+        if not k is None:
+            self.resetKey = k
+            self.resetKeyButton.config(text="Reset: "+k)
+
+    def buttonPress(self):
+        if self.timerServer is None:
+            self.timerServer = TimerServer(
+                addr=self.localIP, port=int(self.portEntry.get()))
+            self.button.config(text="Stop Server")
+            self.timerServer.start()
+
+            for i in [self.mcPathEntry, self.startMessageEntry, self.portEntry, self.startKeyButton, self.resetKeyButton]:
+                i.config(state='disabled')
+            try:
+                self.shk = keyboard.add_hotkey(
+                    self.startKey, self.timerServer.togglePause)
+            except:
+                pass
+            try:
+                self.rhk = keyboard.add_hotkey(
+                    self.resetKey, self.timerServer.resetTimer)
+            except:
+                pass
+
+            self.logPath = join(self.mcPathEntry.get(), "logs/latest.log")
+            self.lastMTime = getmtime(self.logPath)
+            self.startMessage = self.startMessageEntry.get()
+            with open(self.logPath, "r") as logFile:
+                self.logLineLen = len(logFile.readlines())
+                logFile.close()
+
+            self.after(0, self.checkForTSZ)
+        else:
+            self.timerServer.kill()
+            self.timerServer = None
+            self.button.config(text="Start Server")
+            for i in [self.mcPathEntry, self.startMessageEntry, self.portEntry, self.startKeyButton, self.resetKeyButton]:
+                i.config(state='normal')
+
+            keyboard.clear_all_hotkeys()
+
+    def checkForTSZ(self):
+        if not self.timerServer is None:
+            self.after(50, self.checkForTSZ)
+        mtime = getmtime(self.logPath)
+        if mtime != self.lastMTime:
+            self.lastMTime = mtime
+            with open(self.logPath,"r") as logFile:
+                lines = [i.rstrip() for i in logFile.readlines()]
+                logFile.close()
+            for i in lines[self.logLineLen:]:
+                if "Set the time to 0" in i:
+                    self.timerServer.resetTimer()
+                    self.timerServer.startTimer()
+            self.logLineLen = len(lines)
+
+    def close(self):
+        if not self.timerServer is None:
+            self.timerServer.kill()
+
+        self.save()
 
 
 class FontMenu(tk.Toplevel):
     def __init__(self, parent):
-        self.attributes("-topmost", True)
         tk.Toplevel.__init__(self, parent)
+        self.attributes("-topmost", True)
         self.after(100, self.loop)
         self.parent = parent
         self.protocol("WM_DELETE_WINDOW", self.exit)
@@ -365,7 +760,6 @@ class FontMenu(tk.Toplevel):
         self.fontSizeEntry.config(width=3)
         self.fontSizeEntry.grid(padx=2, pady=2, row=0, column=2)
 
-
         colorFrame = tk.Frame(self)
         colorFrame.grid(row=1, column=0, padx=2, pady=2)
 
@@ -382,13 +776,12 @@ class FontMenu(tk.Toplevel):
         self.button1.configure(bg=self.color1)
         self.button2.configure(bg=self.color2)
 
-        self.dingVar = tk.IntVar(self,value=1 if parent.optionsJson["ding"] else 0)
+        self.dingVar = tk.IntVar(
+            self, value=1 if parent.optionsJson["ding"] else 0)
 
-        self.dingCheck = tk.Checkbutton(self,text="Ding? ",variable = self.dingVar, onvalue = 1, offvalue = 0)
-        self.dingCheck.grid(row=2,column=0)
-
-
-        
+        self.dingCheck = tk.Checkbutton(
+            self, text="Ding? ", variable=self.dingVar, onvalue=1, offvalue=0)
+        self.dingCheck.grid(row=2, column=0)
 
     def chooseColour1(self):
         self.color1 = tkColorChooser.askcolor(self.color1)[1]
