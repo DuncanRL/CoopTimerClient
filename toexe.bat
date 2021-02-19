@@ -1,1 +1,1 @@
-pyinstaller --noconfirm --onefile --windowed --icon "Icon.ico" --add-data "Icon.ico;." "CoopTimerClient.pyw"
+pyinstaller --noconfirm --onefile --windowed --icon "Icon.ico" --add-data "Icon.ico;." --add-data "ding.mp3;." "CoopTimerClient.pyw"

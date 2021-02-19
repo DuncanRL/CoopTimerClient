@@ -11,8 +11,9 @@ from os import mkdir, getcwd
 import webbrowser
 from sys import platform, maxsize
 import tkinter.colorchooser as tkColorChooser
+from playsound import playsound
 
-version = "v1.0.1"
+version = "v1.0.3"
 
 
 def resource_path(relative_path):
@@ -48,7 +49,8 @@ class SyncedTime:
 
 
 class TimerClient:
-    def __init__(self):
+    def __init__(self, parent = None):
+        self.parent = parent
         self.socket = None
         self.status = "disconnected"
         self.syncedTime = SyncedTime()
@@ -86,6 +88,7 @@ class TimerClient:
                 fails += 1
         if fails == 3:
             #print("Connection failed")
+            self.status = "disconnected"
             self.failed = True
         else:
             self.status = "stopped"
@@ -108,7 +111,11 @@ class TimerClient:
             return False
 
     def startTimeEvent(self):
-        pass  # Play sound?
+        try:
+            self.parent.startTimeEvent()
+        except:
+            pass
+        
 
     def disconnect(self):
         if self.status != "disconnected":
@@ -138,10 +145,13 @@ class TimerClient:
                         self.status = "paused"
                         self.pauseTime = float(args[1])
                     elif args[0] == "running":
+                        wasStopped = False
                         if self.status == "stopped":
-                            self.startTimeEvent()
+                            wasStopped = True
                         self.status = "running"
                         self.startTime = float(args[1])
+                        if wasStopped:
+                            self.startTimeEvent()
 
             except:
                 self.disconnectionEvent()
@@ -151,20 +161,22 @@ class TimerClient:
 class TimerWindow(tk.Frame):
     def __init__(self, parent, *args, **kwargs):
         tk.Frame.__init__(self, parent, *args, **kwargs)
+        parent.attributes("-topmost", True)
 
         self.parent = parent
         self.connectMenu = None
         self.fontMenu = None
         self.parent.protocol("WM_DELETE_WINDOW", self.exit)
 
-        self.timerClient = TimerClient()
+        self.timerClient = TimerClient(parent=self)
         self.parent.bind('f', self.openFontMenu)
         self.parent.bind('c', self.openConnectMenu)
         self.parent.bind('d', self.disconnect)
         self.font = tkFont.Font(self, ("Arial", 50))
+        self.dingPath = resource_path("ding.mp3")
 
         self.defaultOptions = {"display": {
-            "name": "Arial", "size": 50, "color": "#ffffff", "bg": "#000000"}, "lastConnect": ""}
+            "name": "Arial", "size": 50, "color": "#ffffff", "bg": "#000000"}, "lastConnect": "","ding":False}
         self.text = tk.Label(self, text=self.convertSeconds(
             0), font=self.font, width=50, anchor="w",)
         self.text.pack()
@@ -182,9 +194,19 @@ class TimerWindow(tk.Frame):
         self.loadSettings()
 
         self.after(0, self.loop)
+    
+    def startTimeEvent(self):
+        try:
+            if self.optionsJson["ding"]:
+                playsound(self.dingPath,False)
+        except:
+            pass
 
     def disconnect(self, x=0):
-        self.timerClient.disconnect()
+        if self.timerClient.isConnected():
+            ans = messagebox.askyesno(title="CTC: Disconnect?", message="Are you sure you want to disconnect?")
+            if ans:
+                self.timerClient.disconnect()
 
     def openFontMenu(self, x=0):
         if self.connectMenu == None and self.fontMenu == None:
@@ -209,7 +231,7 @@ class TimerWindow(tk.Frame):
         self.after(int(1000/80), self.loop)
 
         if self.timerClient.getFailed():
-            messagebox.showerror(message="Connection Failed")
+            messagebox.showerror(title="CTC: Error", message="Connection Failed")
             self.openConnectMenu()
 
         if self.timerClient.isConnected():
@@ -224,7 +246,8 @@ class TimerWindow(tk.Frame):
             else:
                 self.font.config(
                     size=int(self.optionsJson["display"]["size"]/3))
-                self.text.config(text="Press 'c' to connect to a server.\nPress 'd' to disconnect.\nPress 'f' to change font settings.")
+                self.text.config(
+                    text="Press 'c' to connect to a server.\nPress 'd' to disconnect.\nPress 'f' to change font settings.")
 
     def loadSettings(self):
         if not isfile(self.optionsPath):
@@ -278,6 +301,7 @@ class TimerWindow(tk.Frame):
 class ConnectMenu(tk.Toplevel):
     def __init__(self, parent):
         tk.Toplevel.__init__(self, parent)
+        self.attributes("-topmost", True)
         self.parent = parent
         self.protocol("WM_DELETE_WINDOW", self.exit)
         self.inputbox = tk.Entry(self, width=20)
@@ -310,16 +334,19 @@ class ConnectMenu(tk.Toplevel):
                     args[1] = int(args[1])
                     valid = True
                 except:
-                    messagebox.showerror(message="Invalid Port!")
+                    messagebox.showerror(title="CTC: Error", message="Invalid Port!")
 
             if valid:
                 self.parent.connectMenu = None
                 self.destroy()
-                self.parent.timerClient.connect(args[0],args[1])
+                self.parent.timerClient.status = "connecting"
+                self.parent.after(int(1000/60), self.parent.timerClient.connect,
+                           args[0], args[1])
 
 
 class FontMenu(tk.Toplevel):
     def __init__(self, parent):
+        self.attributes("-topmost", True)
         tk.Toplevel.__init__(self, parent)
         self.after(100, self.loop)
         self.parent = parent
@@ -338,12 +365,13 @@ class FontMenu(tk.Toplevel):
         self.fontSizeEntry.config(width=3)
         self.fontSizeEntry.grid(padx=2, pady=2, row=0, column=2)
 
-        colorframe = tk.Frame(self)
-        colorframe.grid(row=1, column=0, padx=2, pady=2)
 
-        self.button1 = tk.Button(colorframe, width=13,
+        colorFrame = tk.Frame(self)
+        colorFrame.grid(row=1, column=0, padx=2, pady=2)
+
+        self.button1 = tk.Button(colorFrame, width=13,
                                  command=self.chooseColour1)
-        self.button2 = tk.Button(colorframe, width=13,
+        self.button2 = tk.Button(colorFrame, width=13,
                                  command=self.chooseColour2)
         self.button1.grid(padx=2, pady=2, row=1, column=0)
         self.button2.grid(padx=2, pady=2, row=1, column=1)
@@ -353,6 +381,14 @@ class FontMenu(tk.Toplevel):
 
         self.button1.configure(bg=self.color1)
         self.button2.configure(bg=self.color2)
+
+        self.dingVar = tk.IntVar(self,value=1 if parent.optionsJson["ding"] else 0)
+
+        self.dingCheck = tk.Checkbutton(self,text="Ding? ",variable = self.dingVar, onvalue = 1, offvalue = 0)
+        self.dingCheck.grid(row=2,column=0)
+
+
+        
 
     def chooseColour1(self):
         self.color1 = tkColorChooser.askcolor(self.color1)[1]
@@ -387,6 +423,7 @@ class FontMenu(tk.Toplevel):
     def updatestuff(self):
         self.parent.optionsJson["display"] = {"name": self.fontEntry.get(), "size": int(
             self.fontSizeEntry.get()), "color": self.color1, "bg": self.color2}
+        self.parent.optionsJson["ding"] = (self.dingVar.get() == 1)
         self.parent.reloadJson()
 
     def exit(self):
