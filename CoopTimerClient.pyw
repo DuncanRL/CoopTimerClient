@@ -14,7 +14,7 @@ import tkinter.colorchooser as tkColorChooser
 from playsound import playsound
 import keyboard
 
-version = "v1.0.4"
+version = "v1.1.1"
 
 
 def readKey(timeout):
@@ -727,8 +727,8 @@ class HostMenu(tk.Frame):
                 lines = [i.rstrip() for i in logFile.readlines()]
                 logFile.close()
             for i in lines[self.logLineLen:]:
-                if "Set the time to 0" in i:
-                    self.timerServer.resetTimer()
+                if self.startMessage in i:
+                    self.timerServer.setTime(0)
                     self.timerServer.startTimer()
             self.logLineLen = len(lines)
 
