@@ -11,10 +11,10 @@ from os import mkdir, getcwd
 import webbrowser
 from sys import platform, maxsize
 import tkinter.colorchooser as tkColorChooser
-from playsound import playsound
 import keyboard
+import pygame
 
-version = "v1.1.1"
+version = "v1.2.0"
 
 
 def readKey(timeout):
@@ -335,20 +335,19 @@ class TimerWindow(tk.Frame):
 
         self.parent = parent
         self.connectMenu = None
-        self.fontMenu = None
+        self.optionsMenu = None
         self.hostMenuTL = None
         self.parent.protocol("WM_DELETE_WINDOW", self.exit)
 
         self.timerClient = TimerClient(parent=self)
-        self.parent.bind('f', self.openFontMenu)
+        self.parent.bind('o', self.openOptionsMenu)
         self.parent.bind('c', self.openConnectMenu)
         self.parent.bind('d', self.disconnect)
         self.parent.bind('h', self.openHostMenu)
         self.font = tkFont.Font(self, ("Arial", 50))
-        self.dingPath = resource_path("ding.mp3")
 
         self.defaultOptions = {"display": {
-            "name": "Arial", "size": 50, "color": "#ffffff", "bg": "#000000"}, "lastConnect": "", "ding": False}
+            "name": "Arial", "size": 50, "color": "#ffffff", "bg": "#000000"}, "lastConnect": "", "ding": False, "volume": 10}
         self.text = tk.Label(self, text=self.convertSeconds(
             0), font=self.font, width=50, anchor="w",)
         self.text.pack()
@@ -367,6 +366,10 @@ class TimerWindow(tk.Frame):
 
         self.startTimeEvent()
 
+        pygame.init()
+        pygame.mixer.init()
+        self.sound = pygame.mixer.Sound(resource_path("ding.mp3"))
+
         self.after(0, self.loop)
 
     def openHostMenu(self, x=0):
@@ -376,9 +379,13 @@ class TimerWindow(tk.Frame):
     def startTimeEvent(self):
         try:
             if self.optionsJson["ding"]:
-                playsound(self.dingPath, False)
+                self.ding()
         except:
             pass
+
+    def ding(self):
+        self.sound.set_volume(self.optionsJson["volume"]/100)
+        Thread(target=self.sound.play).start()
 
     def disconnect(self, x=0):
         if self.timerClient.isConnected():
@@ -387,12 +394,12 @@ class TimerWindow(tk.Frame):
             if ans:
                 self.timerClient.disconnect()
 
-    def openFontMenu(self, x=0):
-        if self.connectMenu == None and self.fontMenu == None:
-            self.fontMenu = FontMenu(self)
+    def openOptionsMenu(self, x=0):
+        if self.connectMenu == None and self.optionsMenu == None:
+            self.optionsMenu = OptionsMenu(self)
 
     def openConnectMenu(self, x=0):
-        if self.connectMenu == None and self.fontMenu == None:
+        if self.connectMenu == None and self.optionsMenu == None:
             self.connectMenu = ConnectMenu(self)
 
     def exit(self):
@@ -405,7 +412,7 @@ class TimerWindow(tk.Frame):
 
     def save(self):
         with open(self.optionsPath, "w+") as optionsFile:
-            json.dump(self.optionsJson, optionsFile)
+            json.dump(self.optionsJson, optionsFile, indent=2)
             optionsFile.close()
 
     def loop(self):
@@ -429,7 +436,7 @@ class TimerWindow(tk.Frame):
                 self.font.config(
                     size=int(self.optionsJson["display"]["size"]/3))
                 self.text.config(
-                    text="Press 'c' to connect to a server.\nPress 'd' to disconnect.\nPress 'f' to change font settings.\nPress 'h' to host a server.", anchor="w", justify=tk.LEFT)
+                    text="Press 'c' to connect to a server.\nPress 'd' to disconnect.\nPress 'o' to open options.\nPress 'h' to host a server.", anchor="w", justify=tk.LEFT)
 
     def loadSettings(self):
         if not isfile(self.optionsPath):
@@ -440,7 +447,7 @@ class TimerWindow(tk.Frame):
             with open(self.optionsPath, "w+") as optionsFile:
 
                 self.optionsJson = self.defaultOptions
-                json.dump(self.defaultOptions, optionsFile, indent=4)
+                json.dump(self.defaultOptions, optionsFile, indent=2)
                 optionsFile.close()
         else:
             with open(self.optionsPath, "r") as optionsFile:
@@ -643,7 +650,7 @@ class HostMenu(tk.Frame):
             with open(self.optionsPath, "w+") as optionsFile:
 
                 self.optionsJson = self.defaultOptions
-                json.dump(self.defaultOptions, optionsFile, indent=4)
+                json.dump(self.defaultOptions, optionsFile, indent=2)
                 optionsFile.close()
         else:
             with open(self.optionsPath, "r") as optionsFile:
@@ -658,7 +665,7 @@ class HostMenu(tk.Frame):
         self.optionsJson['startKey'] = self.startKey
         self.optionsJson['resetKey'] = self.resetKey
         with open(self.optionsPath, "w+") as optionsFile:
-            json.dump(self.optionsJson, optionsFile)
+            json.dump(self.optionsJson, optionsFile, indent=2)
             optionsFile.close()
 
     def validateOptions(self):
@@ -723,7 +730,7 @@ class HostMenu(tk.Frame):
         mtime = getmtime(self.logPath)
         if mtime != self.lastMTime:
             self.lastMTime = mtime
-            with open(self.logPath,"r") as logFile:
+            with open(self.logPath, "r") as logFile:
                 lines = [i.rstrip() for i in logFile.readlines()]
                 logFile.close()
             for i in lines[self.logLineLen:]:
@@ -739,7 +746,7 @@ class HostMenu(tk.Frame):
         self.save()
 
 
-class FontMenu(tk.Toplevel):
+class OptionsMenu(tk.Toplevel):
     def __init__(self, parent):
         tk.Toplevel.__init__(self, parent)
         self.attributes("-topmost", True)
@@ -747,8 +754,9 @@ class FontMenu(tk.Toplevel):
         self.parent = parent
         self.protocol("WM_DELETE_WINDOW", self.exit)
 
+        tk.Label(self, text="Font:").grid(row=0, column=0, padx=2, pady=2)
         fontframe = tk.Frame(self)
-        fontframe.grid(row=0, column=0, padx=2, pady=2)
+        fontframe.grid(row=1, column=0, padx=2, pady=2)
         tk.Button(fontframe, text="Open List", command=self.openFontList, width=7).grid(
             padx=2, pady=2, row=0, column=0, sticky="w")
         self.fontEntry = tk.Entry(fontframe, width=19)
@@ -760,8 +768,10 @@ class FontMenu(tk.Toplevel):
         self.fontSizeEntry.config(width=3)
         self.fontSizeEntry.grid(padx=2, pady=2, row=0, column=2)
 
+        tk.Label(self, text="Text Color/Background Color:").grid(row=2,
+                                                                 column=0, padx=2, pady=2)
         colorFrame = tk.Frame(self)
-        colorFrame.grid(row=1, column=0, padx=2, pady=2)
+        colorFrame.grid(row=3, column=0, padx=2, pady=2)
 
         self.button1 = tk.Button(colorFrame, width=13,
                                  command=self.chooseColour1)
@@ -776,12 +786,27 @@ class FontMenu(tk.Toplevel):
         self.button1.configure(bg=self.color1)
         self.button2.configure(bg=self.color2)
 
+        dingFrameL = tk.Frame(self)
+        dingFrameL.grid(row=5, column=0)
+
         self.dingVar = tk.IntVar(
             self, value=1 if parent.optionsJson["ding"] else 0)
 
         self.dingCheck = tk.Checkbutton(
-            self, text="Ding? ", variable=self.dingVar, onvalue=1, offvalue=0)
-        self.dingCheck.grid(row=2, column=0)
+            dingFrameL, text="Ding? ", variable=self.dingVar, onvalue=1, offvalue=0)
+        self.dingCheck.grid(row=0, column=0)
+
+        dingVolFrame = tk.Frame(dingFrameL)
+        dingVolFrame.grid(row=1, column=0)
+
+        self.dingVol = IntEntry(dingVolFrame, max=100)
+        self.dingVol.config(width=4)
+        self.dingVol.insert(0,parent.optionsJson["volume"])
+        self.dingVol.grid(row=0, column=0, sticky="w")
+        tk.Label(dingVolFrame, text="/100 Ding Volume").grid(row=0, column=1)
+
+        tk.Button(dingFrameL, text="DING",
+                  command=self.parent.ding).grid(row=2, column=0)
 
     def chooseColour1(self):
         self.color1 = tkColorChooser.askcolor(self.color1)[1]
@@ -814,13 +839,22 @@ class FontMenu(tk.Toplevel):
         self.updatestuff()
 
     def updatestuff(self):
-        self.parent.optionsJson["display"] = {"name": self.fontEntry.get(), "size": int(
-            self.fontSizeEntry.get()), "color": self.color1, "bg": self.color2}
+        self.parent.optionsJson["display"] = {
+            "name": self.fontEntry.get(), "color": self.color1, "bg": self.color2}
+        try:
+            self.parent.optionsJson["display"]["size"] = int(
+                self.fontSizeEntry.get())
+        except:
+            self.parent.optionsJson["display"]["size"] = 0
         self.parent.optionsJson["ding"] = (self.dingVar.get() == 1)
+        try:
+            self.parent.optionsJson["volume"] = int(self.dingVol.get())
+        except:
+            self.parent.optionsJson["volume"] = 0
         self.parent.reloadJson()
 
     def exit(self):
-        self.parent.fontMenu = None
+        self.parent.optionsMenu = None
         self.destroy()
 
 
